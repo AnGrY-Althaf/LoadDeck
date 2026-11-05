@@ -1,0 +1,21 @@
+{
+  "name": "loaddeck",
+  "version": "1.0.0",
+  "description": "A graphical control center for k6: script generation, live runs, and reports",
+  "private": true,
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "demo-target": "node demo/target-server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.5.0",
+    "chart.js": "^4.6.1",
+    "codemirror": "^5.65.21",
+    "yaml": "^2.9.1"
+  }
+}

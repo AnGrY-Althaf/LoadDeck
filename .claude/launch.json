@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "loaddeck", "runtimeExecutable": "npm", "runtimeArgs": ["start"], "port": 7700 },
+    { "name": "demo-target", "runtimeExecutable": "npm", "runtimeArgs": ["run", "demo-target"], "port": 3333 }
+  ]
+}
