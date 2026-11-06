@@ -30,7 +30,7 @@ export default async function scripts(el) {
   el.innerHTML = `
     <div class="page-head">
       <div><h1>Scripts</h1><p>Your k6 test scripts. Each run keeps a snapshot of the script it used.</p></div>
-      <div class="row"><input type="text" id="q" placeholder="Search…" style="width:200px">
+      <div class="row"><input type="text" id="q" aria-label="Search scripts" placeholder="Search scripts…" style="width:200px">
         <a class="btn" href="#/scripts/new">New script</a><a class="btn primary" href="#/generate">✦ Generate</a></div>
     </div>
     <div class="list" id="slist"></div>`;

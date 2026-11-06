@@ -7,7 +7,9 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "demo-target": "node demo/target-server.js"
+    "demo-target": "node demo/target-server.js",
+    "test": "node --test tests/core.test.js tests/ai.test.js",
+    "test:integration": "node --test tests/k6.integration.test.js"
   },
   "engines": {
     "node": ">=20"

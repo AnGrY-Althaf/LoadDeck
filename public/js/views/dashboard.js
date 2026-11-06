@@ -1,5 +1,6 @@
 import { api, esc, fmt, badge, relTime } from '../ui.js';
 import { lineChart, seriesColors } from '../report-view.js';
+import { icon } from '../icons.js';
 import { app } from '../app.js';
 
 export default async function dashboard(el) {
@@ -12,56 +13,59 @@ export default async function dashboard(el) {
 
   el.innerHTML = `
     <div class="page-head">
-      <div><h1>Dashboard</h1><p>Load &amp; stress testing on k6 — generate scripts, run them, read the reports.</p></div>
-      <div class="row">
-        <a class="btn" href="#/scripts/new">New script</a>
-        <a class="btn primary" href="#/generate">✦ Generate a test</a>
-      </div>
+      <div><div class="eyebrow">WORKSPACE OVERVIEW</div><h1>Performance overview</h1><p>Understand your limits. Ship your next release with confidence.</p></div>
+      <a class="btn primary" href="#/generate">${icon('plus')} Create a test</a>
     </div>
-    ${!app.info?.k6Version ? `<div class="warnbox" style="margin-bottom:14px"><b>k6 was not found.</b> Install it with <code>brew install k6</code> or set the binary path in <a href="#/settings">Settings</a>.</div>` : ''}
-    <div class="tiles">
-      <div class="tile"><div class="k">Scripts</div><div class="v">${scripts.length}</div><div class="d">${scripts.filter((s) => s.source !== 'manual').length} generated</div></div>
-      <div class="tile"><div class="k">Runs</div><div class="v">${finished.length}</div><div class="d">${fmt.num(totalReqs)} requests sent in total</div></div>
-      <div class="tile ${passRate != null && passRate < 0.8 ? 'bad' : passRate != null ? 'good' : ''}"><div class="k">Pass rate (last ${recent.length})</div><div class="v">${passRate == null ? '—' : fmt.pct(passRate, 0)}</div><div class="d">runs meeting all thresholds</div></div>
-      <div class="tile"><div class="k">Running now</div><div class="v">${active.length}</div><div class="d">${active.length ? active.map((r) => esc(r.scriptName)).join(', ') : 'idle'}</div></div>
+    ${!app.info?.k6Version ? `<div class="warnbox" style="margin-bottom:20px"><b>Connect your test engine.</b> Install k6 with <code>brew install k6</code> or set its path in <a href="#/settings">Settings</a>.</div>` : ''}
+    <div class="tiles overview-metrics">
+      ${[
+        ['code', 'Test scripts', fmt.num(scripts.length), `${scripts.filter(s => s.source !== 'manual').length} created with the builder or AI`, ''],
+        ['layers', 'Completed runs', fmt.num(finished.length), `${fmt.num(totalReqs)} API requests recorded`, ''],
+        ['check', 'Run success rate', passRate == null ? '—' : fmt.pct(passRate, 0), recent.length ? `Across the last ${recent.length} completed run${recent.length === 1 ? '' : 's'}` : 'Your first run sets the benchmark', passRate != null && passRate < .8 ? 'bad' : ''],
+        ['activity', 'Active runs', fmt.num(active.length), active.length ? 'Tests are running on your local engine' : 'Engine standing by for your next test', active.length ? 'good' : ''],
+      ].map(([i, k, v, d, cls]) => `<div class="tile ${cls}"><div class="metric-top"><span class="k">${k}</span><span class="metric-icon">${icon(i)}</span></div><div class="v">${v}</div><div class="d">${esc(d)}</div></div>`).join('')}
     </div>
+    ${active.length ? `<div class="section-heading"><h2><span class="status-dot"></span> Running now</h2><span class="muted small">Live from your local engine</span></div><div class="list">${active.map(r => `<a class="list-row" href="#/runs/${r.id}">${badge('running')}<div class="grow"><div class="name">${esc(r.name)}</div><div class="muted small">Started ${relTime(r.createdAt)}</div></div><span class="btn sm">Watch live ${icon('arrow')}</span></a>`).join('')}</div>` : ''}
 
-    ${active.length ? `<h2 style="font-size:15px;margin:24px 0 10px">Live runs</h2><div class="list">${active.map((r) => `
-      <a class="list-row" href="#/runs/${r.id}" style="text-decoration:none">${badge('running')}<div class="grow"><div class="name">${esc(r.name)}</div><div class="muted small">started ${relTime(r.createdAt)}</div></div><span class="btn sm">Watch live →</span></a>`).join('')}</div>` : ''}
-
-    <div class="grid2" style="margin-top:24px">
-      <div class="card">
-        <div class="row" style="justify-content:space-between;margin-bottom:6px"><h3 style="margin:0">p95 response time per run</h3><select id="trend-script" style="width:auto;max-width:220px"><option value="">All scripts</option>${scripts.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
-        <div style="position:relative;height:220px"><canvas id="trend"></canvas></div>
-        <p class="muted small" style="margin:6px 0 0">Spot regressions: each point is one finished run (oldest → newest).</p>
-      </div>
-      <div class="card">
-        <h3>Quick start</h3>
-        <ol style="margin:0;padding-left:18px;line-height:1.9">
-          <li><a href="#/generate">Generate a script</a> from a URL, cURL, a browser HAR recording, OpenAPI or Postman.</li>
-          <li>Pick a load profile (smoke, load, stress, spike, soak, breakpoint) and SLAs.</li>
-          <li>Run it and watch live charts; stop any time.</li>
-          <li>Open the report, export it as HTML/CSV/JSON, or compare against a baseline run.</li>
-        </ol>
-      </div>
+    <div class="overview-grid">
+      <section class="card trend-card">
+        <div class="section-heading"><div><div class="eyebrow">RELEASE HEALTH</div><h2>Response time trend</h2></div><select id="trend-script" aria-label="Filter response trend by script"><option value="">All scripts</option>${scripts.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
+        <div class="trend-plot"><canvas id="trend"></canvas></div>
+        <div class="chart-foot"><span class="chart-key"></span><span>API p95 latency</span><span class="grow"></span><span>Last 30 API runs</span></div>
+      </section>
+      <section class="card workflow-card">
+        <div class="eyebrow">FROM IDEA TO INSIGHT</div><h2>A better test, in three steps.</h2>
+        <div class="workflow-step"><span>01</span><div><b>Build your journey</b><p>Import real traffic, use the visual builder, or describe it with AI.</p></div></div>
+        <div class="workflow-step"><span>02</span><div><b>Put it under pressure</b><p>Choose a load profile and define what a healthy response looks like.</p></div></div>
+        <div class="workflow-step"><span>03</span><div><b>Find your next improvement</b><p>Inspect errors, compare runs, and share a report with your team.</p></div></div>
+        <a class="text-link" href="#/generate">${finished.length ? 'Create another test' : 'Build your first test'} ${icon('arrow')}</a>
+      </section>
     </div>
 
-    <h2 style="font-size:15px;margin:24px 0 10px">Recent runs</h2>
-    ${finished.length ? `<div class="list">${finished.slice(0, 8).map(runRow).join('')}</div><p><a href="#/runs">All runs →</a></p>`
-    : `<div class="card empty"><h3>No runs yet</h3><p>Generate or write a script, then press Run.</p></div>`}
+    <div class="section-heading"><div><div class="eyebrow">CHOOSE YOUR WORKLOAD</div><h2>One workspace. Every layer.</h2></div><span class="muted small">Built on the real k6 engine</span></div>
+    <div class="workload-grid">
+      ${[
+        ['http', 'server', 'API load', 'Find the throughput and latency limits of your services.', 'Protocol requests · high concurrency'],
+        ['browser', 'browser', 'Real browsers', 'See how your application feels to concurrent users.', 'Chromium sessions · Web Vitals'],
+        ['hybrid', 'layers', 'Hybrid testing', 'Measure the frontend while your backend is under load.', 'API traffic + browser journeys'],
+      ].map(([mode, i, title, desc, note]) => `<a class="workload-card" href="#/generate?engine=${mode}"><span class="workload-icon">${icon(i)}</span><div class="workload-title"><h3>${title}</h3>${icon('arrow')}</div><p>${desc}</p><span class="workload-note">${note}</span></a>`).join('')}
+    </div>
+
+    <div class="section-heading"><div><div class="eyebrow">TEST HISTORY</div><h2>Recent runs <span class="section-count">${finished.length}</span></h2></div><a class="text-link" href="#/runs">View all runs ${icon('arrow')}</a></div>
+    ${finished.length ? `<div class="list recent-list">${finished.slice(0, 6).map(runRow).join('')}</div>` : `<div class="card history-empty"><div class="empty-symbol">${icon('clock')}</div><div><h3>Your test history starts here</h3><p>Run a test to see results, spot regressions, and build a baseline.</p></div><a class="btn" href="#/generate">Create a test ${icon('arrow')}</a></div>`}
   `;
 
   let chart = null;
   const drawTrend = () => {
     const sid = el.querySelector('#trend-script').value;
-    const pts = finished.filter((r) => r.headline && (!sid || r.scriptId === sid)).slice(0, 30).reverse();
+    const pts = finished.filter((r) => r.headline?.reqs > 0 && (!sid || r.scriptId === sid)).slice(0, 30).reverse();
     const col = seriesColors(el);
     chart?.destroy();
     chart = null;
     const canvas = el.querySelector('#trend');
     canvas.parentElement.querySelector('.empty-note')?.remove();
     if (!pts.length) {
-      canvas.parentElement.insertAdjacentHTML('beforeend', '<div class="empty-note muted" style="position:absolute;inset:0;display:grid;place-items:center">No finished runs yet</div>');
+      canvas.parentElement.insertAdjacentHTML('beforeend', `<div class="empty-note trend-empty"><span class="empty-symbol">${icon('chart')}</span><b>No performance data yet</b><span>Completed API runs will appear here.<br>Your baseline starts with the first test.</span></div>`);
       return;
     }
     chart = lineChart(canvas, pts.map((r) => new Date(r.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })), [
@@ -85,7 +89,7 @@ export function runRow(r) {
     <div class="grow" style="min-width:0"><div class="name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</div>
       <div class="muted small">${esc(r.scriptName)} · ${relTime(r.createdAt)}${h.durationSec ? ` · ${fmt.dur(h.durationSec)}` : ''}</div></div>
     <div class="small" style="text-align:right;white-space:nowrap">
-      <div><b>${fmt.ms(h.p95)}</b> <span class="muted">p95</span> · <b>${fmt.num(h.rps, 1)}</b> <span class="muted">req/s</span></div>
+      <div>${r.config?.hasBrowser && !h.reqs ? '<b>Browser journey</b>' : `<b>${fmt.ms(h.p95)}</b> <span class="muted">p95</span> · <b>${fmt.num(h.rps, 1)}</b> <span class="muted">req/s</span>`}</div>
       <div class="muted">${fmt.pct(h.errRate)} errors · ${fmt.num(h.maxVus)} VUs</div>
     </div></a>`;
 }

@@ -4,12 +4,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import { applySummary } from './summary.js';
 import { Aggregator } from './aggregator.js';
 import * as store from './store.js';
 
 const active = new Map(); // runId -> state
 const MAX_LOG_BYTES = 20 * 1024 * 1024;
-const TREND_STATS = 'avg,min,med,max,p(90),p(95),p(99),count';
+const TREND_STATS = 'avg,min,med,max,p(75),p(90),p(95),p(99),count';
 
 export function k6Version() {
   return new Promise((resolve) => {
@@ -20,12 +21,12 @@ export function k6Version() {
 }
 
 // Validate a script with `k6 inspect` (parses and evaluates options without running).
-export function validateScript(code) {
+export function validateScript(code, env = {}) {
   return new Promise((resolve) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loaddeck-'));
     const file = path.join(dir, 'script.js');
     fs.writeFileSync(file, code);
-    execFile(store.getSettings().k6Path, ['inspect', file], { timeout: 20000, cwd: dir }, (err, stdout, stderr) => {
+    execFile(store.getSettings().k6Path, ['inspect', ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), file], { timeout: 20000, cwd: dir }, (err, stdout, stderr) => {
       fs.rmSync(dir, { recursive: true, force: true });
       if (err) {
         const msg = String(stderr || err.message).replace(/(?:file:\/\/)?[^\s'"]*\/script\.js/g, 'script.js').replace(/^time="[^"]*" level=\w+ msg="?/gm, '').replace(/"\s*$/gm, '');
@@ -67,7 +68,7 @@ function buildArgs(cfg, dir) {
   return args;
 }
 
-export function startRun(cfg) {
+export async function startRun(cfg) {
   const settings = store.getSettings();
   const running = [...active.values()].filter((s) => s.meta.status === 'running').length;
   if (running >= settings.maxConcurrentRuns) {
@@ -84,6 +85,16 @@ export function startRun(cfg) {
   }
   if (!code) throw Object.assign(new Error('no script code'), { status: 400 });
 
+  const validation = await validateScript(code, cfg.env || {});
+  if (!validation.ok) throw Object.assign(new Error(validation.error), { status: 422 });
+  const hasBrowser = Object.values(validation.options?.scenarios || {}).some(s => s.options?.browser);
+  if (hasBrowser && (cfg.vus || cfg.duration || cfg.iterations || cfg.stages?.length)) {
+    throw Object.assign(new Error('Browser and hybrid tests must use script options to preserve their browser scenarios. Change user counts and durations in the builder or script.'), { status: 422 });
+  }
+  // Validation is asynchronous; recheck capacity before reserving a run slot.
+  if ([...active.values()].filter(s => s.meta.status === 'running').length >= settings.maxConcurrentRuns) {
+    throw Object.assign(new Error('Concurrent run limit reached.'), { status: 409 });
+  }
   const id = store.newId('r');
   const dir = store.createRunDir(id);
   fs.writeFileSync(path.join(dir, 'script.js'), code);
@@ -92,6 +103,8 @@ export function startRun(cfg) {
     vus: cfg.vus || null, duration: cfg.duration || null, iterations: cfg.iterations || null,
     stages: (cfg.stages || []).filter((s) => s.duration), env: cfg.env || {}, tags: cfg.tags || {},
     httpDebug: !!cfg.httpDebug,
+    browserHeadless: cfg.browserHeadless !== false,
+    hasBrowser,
   };
   const meta = {
     id,
@@ -114,13 +127,13 @@ export function startRun(cfg) {
   const state = {
     meta, agg: new Aggregator(), clients: new Set(), logs: [], logBytes: 0,
     offset: 0, decoder: new StringDecoder('utf8'), carry: '', proc: null, timer: null,
-    stopRequested: false, command: `k6 ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')}`,
+    stopRequested: false, command: `k6 ${args.map((a, i) => args[i - 1] === '-e' ? `${a.split('=')[0]}=[redacted]` : (/\s/.test(a) ? `"${a}"` : a)).join(' ')}`,
   };
   active.set(id, state);
 
   const proc = spawn(settings.k6Path, args, {
     cwd: dir,
-    env: { ...process.env, K6_NO_USAGE_REPORT: 'true' },
+    env: { ...process.env, K6_NO_USAGE_REPORT: 'true', ...(hasBrowser ? { K6_BROWSER_HEADLESS: String(config.browserHeadless) } : {}) },
   });
   state.proc = proc;
 
@@ -200,9 +213,11 @@ function finish(state, exitCode, settings) {
   try { summary = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')); } catch { /* none */ }
 
   const result = state.agg.result();
+  const measurement = applySummary(result, summary);
   const thresholds = parseThresholds(summary);
   const report = {
     ...result,
+    measurement,
     thresholds,
     k6Metrics: summary?.metrics || {},
     k6Groups: summary?.root_group || null,

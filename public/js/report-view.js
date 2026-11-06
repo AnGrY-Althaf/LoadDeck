@@ -137,9 +137,9 @@ export function drawSeriesCharts(root, prefix, series, charts = {}) {
 export function seriesChartsHtml(prefix) {
   return `<div class="charts">
     ${chartCard(prefix + 'vus', 'Virtual users')}
-    ${chartCard(prefix + 'rps', 'Throughput', 'requests per second')}
-    ${chartCard(prefix + 'lat', 'Response time', 'http_req_duration')}
-    ${chartCard(prefix + 'err', 'Errors', 'failed requests per second')}
+    ${chartCard(prefix + 'rps', 'API throughput', 'requests per second')}
+    ${chartCard(prefix + 'lat', 'API response time', 'http_req_duration')}
+    ${chartCard(prefix + 'err', 'API errors', 'failed requests per second')}
   </div>`;
 }
 
@@ -148,7 +148,10 @@ export function findings(meta, r) {
   const out = [];
   const s = r.series || [];
   const t = r.totals || {};
-  if (!t.reqs) {
+  if (t.dropped) out.push({ level: 'warning', text: `${fmt.num(t.dropped)} scheduled iterations were dropped. The requested load was not fully delivered. Check allocated VUs, journey duration and load-generator CPU/memory before drawing capacity conclusions.` });
+  if (r.measurement && !r.measurement.complete) out.push({ level: 'warning', text: 'The k6 summary is missing. These are partial stream measurements; inspect the run log.' });
+  if (r.browser?.reqs) out.push({ level: 'info', text: `${fmt.num(r.browser.reqs)} browser requests recorded separately from API traffic; browser error rate ${fmt.pct(r.browser.errRate)}. Web vitals describe rendered pages, while API latency measures protocol requests.` });
+  if (!t.reqs && !r.browser?.reqs) {
     out.push({ level: 'critical', text: 'No HTTP requests were recorded. Check the script, the target URL and the run log.' });
     return out;
   }
@@ -158,7 +161,7 @@ export function findings(meta, r) {
 
   if (t.errRate >= 0.05) out.push({ level: 'critical', text: `High error rate: ${fmt.pct(t.errRate)} of requests failed (${fmt.num(t.fails)}).${r.errors?.[0] ? ` Most common: <b>${esc(r.errors[0].message)}</b> on ${esc(r.errors[0].endpoint)}.` : ''}` });
   else if (t.errRate >= 0.01) out.push({ level: 'warning', text: `Error rate ${fmt.pct(t.errRate)} (${fmt.num(t.fails)} failed requests).${r.errors?.[0] ? ` Most common: <b>${esc(r.errors[0].message)}</b>.` : ''}` });
-  else if (t.fails === 0) out.push({ level: 'good', text: 'No failed requests.' });
+  else if (t.reqs && t.fails === 0) out.push({ level: 'good', text: 'No failed requests.' });
 
   // Error onset: first second where errors became significant.
   const firstErr = s.findIndex((p) => p.rps > 0 && p.errRate > 0.05);
@@ -225,15 +228,16 @@ export function renderReport(root, meta, r, { standalone = false } = {}) {
   const overrides = [cfg.vus && `${cfg.vus} VUs`, cfg.duration && `duration ${cfg.duration}`, cfg.iterations && `${cfg.iterations} iterations`, cfg.stages?.length && `${cfg.stages.length} stages`].filter(Boolean);
 
   const tiles = [
-    ['Requests', fmt.num(t.reqs), `${fmt.num(t.rps, 1)} req/s avg · peak ${fmt.num(t.peakRps)}`],
-    ['p95 response', fmt.ms(lat.p95), `p99 ${fmt.ms(lat.p99)} · max ${fmt.ms(lat.max)}`],
-    ['Average response', fmt.ms(lat.avg), `median ${fmt.ms(lat.med)}`],
-    ['Error rate', fmt.pct(t.errRate), `${fmt.num(t.fails)} failed`, t.errRate >= 0.01 ? 'bad' : t.reqs ? 'good' : ''],
+    ['API requests', fmt.num(t.reqs), `${fmt.num(t.rps, 1)} req/s avg · peak ${fmt.num(t.peakRps)}`],
+    ['API p95 response', fmt.ms(t.reqs ? lat.p95 : null), `p99 ${fmt.ms(t.reqs ? lat.p99 : null)} · max ${fmt.ms(t.reqs ? lat.max : null)}`],
+    ['API average response', fmt.ms(t.reqs ? lat.avg : null), `median ${fmt.ms(t.reqs ? lat.med : null)}`],
+    ['API error rate', fmt.pct(t.reqs ? t.errRate : null), `${fmt.num(t.fails)} failed`, t.errRate >= 0.01 ? 'bad' : t.reqs ? 'good' : ''],
     ['Checks passed', t.checkRate == null ? '—' : fmt.pct(t.checkRate), `${fmt.num(t.checksPass)} / ${fmt.num(t.checksPass + t.checksFail)}`, t.checkRate != null && t.checkRate < 0.99 ? 'bad' : ''],
+    ['Dropped iterations', fmt.num(t.dropped || 0), 'scheduled journeys not started', t.dropped ? 'bad' : ''],
     ['Peak VUs', fmt.num(t.maxVus), `${fmt.num(t.iters)} iterations`],
     ['Duration', fmt.dur(r.durationSec), fmt.date(r.startedAt)],
     ['Data', fmt.bytes(t.rx), `received · ${fmt.bytes(t.tx)} sent`],
-    ['Time to first byte', fmt.ms(r.ttfb?.p95), 'p95 http_req_waiting'],
+    ['Time to first byte', fmt.ms(t.reqs ? r.ttfb?.p95 : null), 'p95 http_req_waiting'],
   ];
 
   const statusTotal = Object.values(r.statuses || {}).reduce((a, b) => a + b, 0) || 1;
@@ -259,6 +263,11 @@ export function renderReport(root, meta, r, { standalone = false } = {}) {
     <h2>Summary</h2>
     <div class="tiles">${tiles.map(([k, v, d, cls]) => `<div class="tile ${cls || ''}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="d">${esc(d)}</div></div>`).join('')}</div>
 
+    <p class="rp-sub">Overall API aggregates: ${r.measurement?.source === 'k6-summary' ? 'exact k6 summary' : 'stream estimates'}. Live and per-endpoint percentiles use histograms; low sample counts limit percentile conclusions. Arrival rates count journeys, each of which may send multiple requests.</p>
+    ${r.browser?.reqs ? `<h2>Browser experience</h2><div class="tiles">
+      <div class="tile"><div class="k">Browser requests</div><div class="v">${fmt.num(r.browser.reqs)}</div><div class="d">${fmt.pct(r.browser.errRate)} failed · p95 ${fmt.ms(r.browser.latency?.p95)}</div></div>
+      ${Object.entries(r.browser.vitals || {}).map(([name, v]) => `<div class="tile"><div class="k">${esc(name.replace('browser_web_vital_', '').toUpperCase())}</div><div class="v">${name.endsWith('_cls') ? fmt.num(v.p75, 4) : fmt.ms(v.p75)}</div><div class="d">p75 · ${fmt.num(v.count)} samples</div></div>`).join('')}
+    </div>` : ''}
     <h2>Key findings <small>automatic analysis</small></h2>
     <div class="findings">${findings(meta, r).map((f) => `<div class="finding ${f.level}"><div class="fi">${{ critical: '!', warning: '!', good: '✓', info: 'i' }[f.level]}</div><div>${f.text}</div></div>`).join('')}</div>
 
@@ -270,7 +279,7 @@ export function renderReport(root, meta, r, { standalone = false } = {}) {
     <h2>Over time</h2>
     ${seriesChartsHtml('rpc-')}
 
-    <h2>Endpoints <small>${(r.endpoints || []).length} unique · click a column to sort</small></h2>
+    <h2>API endpoints <small>${(r.endpoints || []).length} unique · click a column to sort</small></h2>
     <div class="tbl-wrap"><table class="tbl" id="rp-endpoints"><thead><tr>
       <th class="sortable" data-k="name">Endpoint</th><th class="sortable num" data-k="count">Requests</th><th class="sortable num" data-k="rps">req/s</th>
       <th class="sortable num" data-k="errRate">Errors</th><th class="sortable num" data-k="avg">avg</th><th class="sortable num" data-k="med">med</th>
@@ -281,7 +290,7 @@ export function renderReport(root, meta, r, { standalone = false } = {}) {
       <div>
         <h2 style="margin-top:12px">Status codes</h2>
         <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Status</th><th class="num">Count</th><th class="num">Share</th><th style="width:40%"></th></tr></thead><tbody>
-        ${statusRows.map(([code, n]) => { const bad = code === '0' || +code >= 400; return `<tr><td class="${bad ? 'bad' : ''}">${code === '0' ? '0 (no response)' : esc(code)}</td><td class="num">${fmt.num(n)}</td><td class="num">${fmt.pct(n / statusTotal, 1)}</td><td><div class="bar ${bad ? 'crit' : ''}" style="width:${Math.max(1, (n / statusTotal) * 100)}%"></div></td></tr>`; }).join('') || '<tr><td colspan="4" class="muted">No HTTP responses</td></tr>'}
+        ${statusRows.map(([code, n]) => { const bad = code === '0' || +code >= 400; return `<tr><td class="${bad ? 'bad' : ''}">${code === '0' ? '0 (no response)' : esc(code)}</td><td class="num">${fmt.num(n)}</td><td class="num">${fmt.pct(n / statusTotal, 1)}</td><td><div class="bar ${bad ? 'crit' : ''}" style="width:${Math.max(1, (n / statusTotal) * 100)}%"></div></td></tr>`; }).join('') || '<tr><td colspan="4" class="muted">No API responses</td></tr>'}
         </tbody></table></div>
       </div>
       <div>
@@ -316,7 +325,7 @@ export function renderReport(root, meta, r, { standalone = false } = {}) {
       <td class="num ${e.errRate >= 0.01 ? 'bad' : ''}">${fmt.pct(e.errRate, 1)}</td>
       ${['avg', 'med', 'p90', 'p95', 'p99', 'max'].map((k) => `<td class="num">${fmt.ms(e[k])}</td>`).join('')}
       <td class="muted">${Object.entries(e.statuses || {}).map(([c, n]) => `${c === '0' ? 'none' : c}×${fmt.num(n)}`).join(' ')}</td></tr>`).join('')
-      || '<tr><td colspan="11" class="muted">No HTTP requests</td></tr>';
+      || '<tr><td colspan="11" class="muted">No API requests</td></tr>';
   };
   root.querySelectorAll('#rp-endpoints th.sortable').forEach((th2) => th2.addEventListener('click', () => {
     const k = th2.dataset.k;
@@ -330,7 +339,7 @@ export function renderReport(root, meta, r, { standalone = false } = {}) {
 }
 
 function fmtThreshold(x) {
-  const isTime = /duration|waiting|connecting|blocked|tls|sending|receiving/.test(x.metric) && !/rate|count/.test(x.expr);
+  const isTime = /duration|waiting|connecting|blocked|tls|sending|receiving|browser_web_vital_(lcp|fcp|inp|ttfb)/.test(x.metric) && !/rate|count/.test(x.expr);
   if (isTime) return fmt.ms(x.value);
   if (/^rate/.test(x.expr.trim())) return fmt.pct(x.value);
   return fmt.num(x.value, 2);
@@ -339,9 +348,9 @@ function fmtThreshold(x) {
 function k6MetricsTable(metrics) {
   const names = Object.keys(metrics).sort();
   if (!names.length) return '<p class="muted" style="color:var(--muted)">No k6 summary was produced (the run may have failed before starting).</p>';
-  const cols = ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'count', 'rate', 'value'];
+  const cols = ['avg', 'min', 'med', 'max', 'p(75)', 'p(90)', 'p(95)', 'p(99)', 'count', 'rate', 'value'];
   const used = cols.filter((c) => names.some((n) => metrics[n][c] !== undefined));
-  const isTime = (n) => /duration|waiting|connecting|blocked|tls_handshaking|sending|receiving/.test(n);
+  const isTime = (n) => /duration|waiting|connecting|blocked|tls_handshaking|sending|receiving|browser_web_vital_(lcp|fcp|inp|ttfb)/.test(n);
   const cell = (n, c) => {
     const v = metrics[n][c];
     if (v === undefined) return '';

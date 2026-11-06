@@ -186,6 +186,8 @@ route('POST', '/api/ai/generate', async (req, res) => {
     reference: b.reference || '',
     currentCode: b.currentCode || '',
     loadHint: b.loadHint || '',
+    engine: ['http', 'browser', 'hybrid'].includes(b.engine) ? b.engine : '',
+    browser: b.browser || null,
     provider: b.provider || '',
     model: b.model || '',
   }, { settings, validate: runner.validateScript, emit, signal: controller.signal });
@@ -201,7 +203,7 @@ route('GET', '/api/runs', (req, res, p, url) => {
 });
 route('POST', '/api/runs', async (req, res) => {
   const b = await readBody(req);
-  ok(res, runner.startRun(b));
+  ok(res, await runner.startRun(b));
 });
 route('GET', '/api/runs/:id', (req, res, p) => {
   const meta = store.getRunMeta(p.id);

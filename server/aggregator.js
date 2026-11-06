@@ -57,6 +57,15 @@ export class Histogram {
 // the k6 summary export still covers all metrics in aggregate.
 const WANTED = new Set([
   'http_req_duration',
+  'http_req_failed',
+  'dropped_iterations',
+  'browser_http_req_duration',
+  'browser_http_req_failed',
+  'browser_web_vital_lcp',
+  'browser_web_vital_fcp',
+  'browser_web_vital_cls',
+  'browser_web_vital_inp',
+  'browser_web_vital_ttfb',
   'http_req_waiting',
   'vus',
   'iterations',
@@ -69,7 +78,7 @@ const WANTED = new Set([
 function newBucket() {
   return {
     reqs: 0, fails: 0, durSum: 0, hist: new Histogram(),
-    vus: null, iters: 0, rx: 0, tx: 0, checksPass: 0, checksFail: 0,
+    vus: null, dropped: 0, iters: 0, rx: 0, tx: 0, checksPass: 0, checksFail: 0,
   };
 }
 
@@ -81,12 +90,15 @@ export class Aggregator {
     this.lastSec = 0;
     this.duration = new Histogram();
     this.waiting = new Histogram();
+    this.httpFailures = 0;
+    this.httpFailureSamples = 0;
+    this.browser = { reqs: 0, fails: 0, failureSamples: 0, latency: new Histogram(), vitals: {} };
     this.iterDuration = new Histogram();
     this.endpoints = new Map();
     this.statuses = {};
     this.errors = new Map();
     this.checks = new Map();
-    this.totals = { reqs: 0, fails: 0, iters: 0, rx: 0, tx: 0, checksPass: 0, checksFail: 0, maxVus: 0 };
+    this.totals = { reqs: 0, fails: 0, iters: 0, rx: 0, tx: 0, checksPass: 0, checksFail: 0, maxVus: 0, dropped: 0 };
     this.metricDefs = {};
     this.flushedUpTo = null; // last second already sent to live clients
   }
@@ -110,42 +122,57 @@ export class Aggregator {
     return b;
   }
 
+  endpoint(tags) {
+    const key = `${tags.method || ''} ${tags.name || tags.url || ''}`;
+    let ep = this.endpoints.get(key);
+    if (!ep) {
+      ep = { method: tags.method || '', name: tags.name || tags.url || '', group: tags.group || '', count: 0, fails: 0, failureSamples: 0, rateFails: 0, hist: new Histogram(), statuses: {} };
+      this.endpoints.set(key, ep);
+    }
+    return ep;
+  }
+
   ingestLine(line) {
     if (line.length < 10) return;
-    // Fast path: metric name is the first field in k6's JSON output.
-    const m = /^\{"metric":"([^"]+)","type":"(Point|Metric)"/.exec(line);
-    let name, type;
-    if (m) { name = m[1]; type = m[2]; }
-    else if (line.startsWith('{"type":"Metric"')) { type = 'Metric'; }
-    else return;
-    if (type === 'Point' && !WANTED.has(name)) return;
-
+    // Skip unwanted metrics before parsing; do not depend on JSON key ordering.
+    const name = /"metric"\s*:\s*"([^"\\]+)"/.exec(line)?.[1];
+    if (name && !WANTED.has(name) && !/"type"\s*:\s*"Metric"/.test(line)) return;
     let obj;
     try { obj = JSON.parse(line); } catch { return; }
     if (obj.type === 'Metric') {
       this.metricDefs[obj.metric] = { type: obj.data.type, contains: obj.data.contains };
       return;
     }
+    if (obj.type !== 'Point' || !WANTED.has(obj.metric)) return;
     const d = obj.data;
+    if (!d || !Number.isFinite(d.value) || typeof d.time !== 'string' || !Number.isFinite(Date.parse(d.time))) return;
     const v = d.value;
     const tags = d.tags || {};
     const b = this.bucket(this.secOf(d.time));
 
+    if (obj.metric.startsWith('browser_web_vital_')) {
+      (this.browser.vitals[obj.metric] ||= new Histogram()).add(v);
+      return;
+    }
     switch (obj.metric) {
+      case 'http_req_failed': {
+        this.httpFailures += v; this.httpFailureSamples++; b.fails += v;
+        const ep = this.endpoint(tags);
+        ep.failureSamples++; ep.rateFails += v;
+        break;
+      }
+      case 'dropped_iterations': b.dropped += v; this.totals.dropped += v; break;
+      case 'browser_http_req_duration': this.browser.reqs++; this.browser.latency.add(v); break;
+      case 'browser_http_req_failed': this.browser.fails += v; this.browser.failureSamples++; break;
       case 'http_req_duration': {
         const failed = tags.expected_response === 'false';
         b.reqs++; b.durSum += v; b.hist.add(v);
-        if (failed) b.fails++;
+
         this.totals.reqs++;
         if (failed) this.totals.fails++;
         this.duration.add(v);
 
-        const key = `${tags.method || ''} ${tags.name || tags.url || ''}`;
-        let ep = this.endpoints.get(key);
-        if (!ep) {
-          ep = { method: tags.method || '', name: tags.name || tags.url || '', group: tags.group || '', count: 0, fails: 0, hist: new Histogram(), statuses: {} };
-          this.endpoints.set(key, ep);
-        }
+        const ep = this.endpoint(tags);
         ep.count++; ep.hist.add(v);
         if (failed) ep.fails++;
         const st = tags.status || '0';
@@ -187,6 +214,7 @@ export class Aggregator {
       vus: b.vus,
       rps: b.reqs,
       errors: b.fails,
+      dropped: b.dropped,
       errRate: b.reqs ? b.fails / b.reqs : 0,
       avg: b.reqs ? b.durSum / b.reqs : null,
       p95: b.reqs ? b.hist.quantile(95) : null,
@@ -227,10 +255,13 @@ export class Aggregator {
   }
 
   liveTotals() {
-    const secs = this.seconds.size;
+    const secs = this.seconds.size ? [...this.seconds.keys()].reduce((max, sec) => Math.max(max, sec), this.startSec) - this.startSec + 1 : 0;
+    const fails = this.httpFailureSamples ? this.httpFailures : this.totals.fails;
     return {
       ...this.totals,
-      errRate: this.totals.reqs ? this.totals.fails / this.totals.reqs : 0,
+      fails,
+      browserReqs: this.browser.reqs,
+      errRate: this.totals.reqs ? fails / this.totals.reqs : 0,
       avg: this.duration.count ? this.duration.sum / this.duration.count : 0,
       p95: this.duration.quantile(95),
       elapsed: secs,
@@ -239,6 +270,7 @@ export class Aggregator {
 
   result() {
     const series = this.series();
+    const fails = this.httpFailureSamples ? this.httpFailures : this.totals.fails;
     const durationSec = series.length ? series[series.length - 1].t - series[0].t + 1 : 0;
     const peakRps = series.reduce((m, p) => Math.max(m, p.rps), 0);
     return {
@@ -246,17 +278,25 @@ export class Aggregator {
       durationSec,
       totals: {
         ...this.totals,
-        errRate: this.totals.reqs ? this.totals.fails / this.totals.reqs : 0,
+        fails,
+        errRate: this.totals.reqs ? fails / this.totals.reqs : 0,
         rps: durationSec ? this.totals.reqs / durationSec : 0,
         peakRps,
         checkRate: (this.totals.checksPass + this.totals.checksFail)
           ? this.totals.checksPass / (this.totals.checksPass + this.totals.checksFail) : null,
       },
+      browser: {
+        reqs: this.browser.reqs, fails: this.browser.fails,
+        errRate: this.browser.failureSamples ? this.browser.fails / this.browser.failureSamples : null,
+        latency: this.browser.latency.stats(),
+        vitals: Object.fromEntries(Object.entries(this.browser.vitals).map(([key, hist]) => [key, { ...hist.stats(), p75: hist.quantile(75) }])),
+      },
       latency: this.duration.stats(),
       ttfb: this.waiting.stats(),
       iterationDuration: this.iterDuration.stats(),
       endpoints: [...this.endpoints.values()]
-        .map((e) => ({ method: e.method, name: e.name, group: e.group, count: e.count, fails: e.fails, errRate: e.count ? e.fails / e.count : 0, statuses: e.statuses, ...e.hist.stats(), rps: durationSec ? e.count / durationSec : 0 }))
+        .filter(e => e.count > 0)
+        .map((e) => { const failed = e.failureSamples ? e.rateFails : e.fails; return { method: e.method, name: e.name, group: e.group, count: e.count, fails: failed, errRate: e.count ? failed / e.count : 0, statuses: e.statuses, ...e.hist.stats(), rps: durationSec ? e.count / durationSec : 0 }; })
         .sort((a, b) => b.count - a.count),
       statuses: this.statuses,
       errors: [...this.errors.values()].sort((a, b) => b.count - a.count).slice(0, 100),

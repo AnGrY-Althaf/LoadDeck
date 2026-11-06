@@ -45,11 +45,13 @@ function live(el, meta) {
     const rps5 = recent.length ? recent.reduce((m, p) => m + p.rps, 0) / recent.length : 0;
     el.querySelector('#ltiles').innerHTML = [
       ['Virtual users', fmt.num(last.vus ?? 0), `peak ${fmt.num(t.maxVus || 0)}`],
-      ['Requests / s', fmt.num(rps5, 1), 'last 5 seconds'],
-      ['p95 response', fmt.ms(last.p95), `overall ${fmt.ms(t.p95)}`],
-      ['Avg response', fmt.ms(last.avg), `overall ${fmt.ms(t.avg)}`],
-      ['Error rate', fmt.pct(t.errRate || 0), `${fmt.num(t.fails || 0)} failed`, (t.errRate || 0) >= 0.01 ? 'bad' : ''],
-      ['Requests', fmt.num(t.reqs || 0), `${fmt.num(t.iters || 0)} iterations`],
+      ['API requests / s', fmt.num(rps5, 1), 'last 5 seconds'],
+      ['API p95 response', fmt.ms(last.p95), `overall ${fmt.ms(t.p95)}`],
+      ['API avg response', fmt.ms(last.avg), `overall ${fmt.ms(t.avg)}`],
+      ['API error rate', fmt.pct(t.errRate || 0), `${fmt.num(t.fails || 0)} failed`, (t.errRate || 0) >= 0.01 ? 'bad' : ''],
+      ['Browser requests', fmt.num(t.browserReqs || 0), 'Chromium traffic, separate from API'],
+      ['Dropped iterations', fmt.num(t.dropped || 0), 'scheduled journeys not started', t.dropped ? 'bad' : ''],
+      ['API requests', fmt.num(t.reqs || 0), `${fmt.num(t.iters || 0)} iterations`],
       ['Checks failed', fmt.num(t.checksFail || 0), `${fmt.num(t.checksPass || 0)} passed`, t.checksFail ? 'bad' : ''],
     ].map(([k, v, d, c]) => `<div class="tile ${c || ''}"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join('');
   };
@@ -161,6 +163,7 @@ async function report(el, id) {
       const c = meta.config || {};
       const preset = {
         mode: c.stages?.length ? 'stages' : c.iterations ? 'iterations' : c.vus || c.duration ? 'quick' : 'script',
+        browserHeadless: c.browserHeadless,
         vus: c.vus || 10, duration: c.duration || '30s', iterations: c.iterations || 100,
         stages: (c.stages || []).map((s) => `${s.duration}:${s.target}`).join('\n') || undefined,
         env: Object.entries(c.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),

@@ -42,7 +42,13 @@ async function render() {
   for (const [re, fn, nav] of ROUTES) {
     const m = re.exec(pathPart);
     if (!m) continue;
-    document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.nav === nav));
+    document.querySelectorAll('#nav a').forEach((a) => {
+      const selected = a.dataset.nav === nav;
+      a.classList.toggle('on', selected);
+      if (selected) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    document.getElementById('workspace-crumb').textContent = { dashboard: 'Overview', scripts: 'Scripts', generate: 'Test builder', runs: 'Runs & reports', compare: 'Compare', settings: 'Settings' }[nav];
+    view.dataset.view = nav;
     view.innerHTML = '';
     window.scrollTo(0, 0);
     try {
@@ -61,10 +67,14 @@ async function refreshInfo() {
   try {
     app.info = await api('/api/info');
     const v = document.getElementById('k6v');
-    v.textContent = app.info.k6Version || '⚠ k6 not found — check Settings';
+    v.textContent = app.info.k6Version?.match(/k6 v[\d.]+/)?.[0] || (app.info.k6Version ? 'k6 available' : 'k6 not found');
+    v.title = app.info.k6Version || 'Set the k6 path in Settings';
+    const engine = document.getElementById('engine-state');
+    engine.textContent = app.info.k6Version ? 'k6 ready' : 'Engine unavailable';
+    engine.className = `engine-state ${app.info.k6Version ? 'online' : 'offline'}`;
     v.classList.toggle('bad', !app.info.k6Version);
     renderActive(app.info.active || []);
-  } catch { /* server down */ }
+  } catch { const engine = document.getElementById('engine-state'); engine.textContent = 'Server disconnected'; engine.className = 'engine-state offline'; }
 }
 
 function renderActive(active) {
@@ -72,6 +82,8 @@ function renderActive(active) {
   const running = active.filter((r) => r.status === 'running');
   el.innerHTML = running.map((r) => `<a href="#/runs/${r.id}"><b>● Running</b> · ${esc(r.scriptName)}<br><span class="muted small">${fmt.dur((Date.now() - r.createdAt) / 1000)}</span></a>`).join('');
 }
+
+document.querySelector('.skip-link').addEventListener('click', e => { e.preventDefault(); document.getElementById('view').focus(); });
 
 document.getElementById('theme-btn').addEventListener('click', () => {
   const root = document.documentElement;

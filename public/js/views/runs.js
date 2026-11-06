@@ -11,8 +11,8 @@ export default async function runs(el, { query }) {
     <div class="page-head">
       <div><h1>Runs &amp; reports</h1><p>Every run keeps its report, log and the exact script used.</p></div>
       <div class="row">
-        <select id="fs" style="width:auto"><option value="">All scripts</option>${scripts.map(([k, n]) => `<option value="${esc(k)}">${esc(n)}</option>`).join('')}</select>
-        <select id="fst" style="width:auto"><option value="">Any status</option><option value="passed">Passed</option><option value="failed">Thresholds failed</option><option value="error">Error</option><option value="stopped">Stopped</option><option value="running">Running</option></select>
+        <select id="fs" aria-label="Filter runs by script" style="width:auto"><option value="">All scripts</option>${scripts.map(([k, n]) => `<option value="${esc(k)}">${esc(n)}</option>`).join('')}</select>
+        <select id="fst" aria-label="Filter runs by status" style="width:auto"><option value="">Any status</option><option value="passed">Passed</option><option value="failed">Thresholds failed</option><option value="error">Error</option><option value="stopped">Stopped</option><option value="running">Running</option></select>
         <button class="btn" id="cmp" disabled>Compare selected</button>
         <button class="btn danger" id="del" disabled>Delete selected</button>
       </div>
@@ -25,8 +25,8 @@ export default async function runs(el, { query }) {
     el.querySelector('#rt tbody').innerHTML = shown.map((r) => {
       const h = r.headline || {};
       return `<tr data-id="${r.id}" style="cursor:pointer">
-        <td><input type="checkbox" ${sel.has(r.id) ? 'checked' : ''} ${r.status === 'running' ? 'disabled' : ''}></td>
-        <td style="max-width:360px;overflow:hidden;text-overflow:ellipsis">${r.baseline ? '<span title="Baseline">★</span> ' : ''}<b>${esc(r.name)}</b><div class="muted small">${esc(r.scriptName)}</div></td>
+        <td><input type="checkbox" aria-label="Select ${esc(r.name)}" ${sel.has(r.id) ? 'checked' : ''} ${r.status === 'running' ? 'disabled' : ''}></td>
+        <td style="max-width:360px;overflow:hidden;text-overflow:ellipsis">${r.baseline ? '<span title="Baseline">★</span> ' : ''}<a class="run-name" href="#/runs/${r.id}">${esc(r.name)}</a><div class="muted small">${esc(r.scriptName)}</div></td>
         <td>${badge(r.status)}</td><td class="muted">${relTime(r.createdAt)}</td>
         <td class="num">${fmt.dur(h.durationSec)}</td><td class="num">${fmt.num(h.maxVus)}</td><td class="num">${fmt.num(h.reqs)}</td>
         <td class="num">${fmt.num(h.rps, 1)}</td><td class="num">${fmt.ms(h.p95)}</td>

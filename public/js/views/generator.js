@@ -2,6 +2,7 @@ import { api, esc, toast, readFile, store, fmt } from '../ui.js';
 import { navigate, setLeaveGuard, app } from '../app.js';
 import { lineChart, seriesColors } from '../report-view.js';
 import { openRunDialog } from './run-dialog.js';
+import { icon } from '../icons.js';
 import { streamAi, usageText, providerPicker, rememberProvider } from '../ai.js';
 
 const SOURCES = {
@@ -30,6 +31,7 @@ const newReq = (o = {}) => ({ id: `n${Date.now().toString(36)}${seq++}`, enabled
 
 function defaultDef() {
   return {
+    engine: 'http', browser: { vus: 2, duration: '1m', lcp: 2500, steps: [{ action: 'goto', value: '/', selector: '' }] },
     name: 'New load test', baseUrl: '', requests: [], variables: [], data: { csv: '', mode: 'sequential' }, defaultHeaders: {},
     auth: { type: 'none' }, profile: { type: 'load', ...(app.info?.profiles?.load?.defaults || {}) },
     thresholds: { p95: 500, p99: '', errorRate: 1, checkRate: 99, abortOnFail: false }, thinkTime: { min: 1, max: 3 }, options: { insecure: false }, source: 'builder',
@@ -73,7 +75,7 @@ function profileShape(p) {
   return { pts, unit };
 }
 
-export default async function generator(el, { params }) {
+export default async function generator(el, { params, query }) {
   const scriptId = params[0] || null;
   let script = null;
   let def;
@@ -84,8 +86,10 @@ export default async function generator(el, { params }) {
   } else {
     def = store.get('gen-draft', null) || defaultDef();
   }
-  let tab = def.requests.length ? 'requests' : 'source';
-  let source = store.get('gen-source', 'curl');
+  const requestedEngine = query?.get('engine');
+  if (!scriptId && ['http', 'browser', 'hybrid'].includes(requestedEngine)) def.engine = requestedEngine;
+  let tab = def.engine === 'browser' ? 'browser' : def.requests.length ? 'requests' : 'source';
+  let source = def.engine === 'browser' || query?.get('source') === 'ai' ? 'ai' : store.get('gen-source', 'curl');
   let open = new Set();
   let warnings = [];
   let previewCm = null, previewCode = '';
@@ -97,15 +101,21 @@ export default async function generator(el, { params }) {
 
   el.innerHTML = `
     <div class="page-head">
-      <div><h1>${scriptId ? `Builder · ${esc(script.name)}` : 'Script generator'}</h1><p>Import traffic or describe requests, pick a load profile, and generate a ready-to-run k6 script.</p></div>
+      <div><div class="eyebrow">DESIGN YOUR WORKLOAD</div><h1>${scriptId ? `Builder · ${esc(script.name)}` : 'Build a performance test'}</h1><p>Start with a real journey. Define the load. Know what good looks like.</p></div>
       <div class="row"><button class="btn ghost" id="reset">${scriptId ? 'Revert' : 'Start over'}</button></div>
     </div>
+    <fieldset class="engine-picker" id="engine">
+      <legend>What would you like to test?</legend>
+      <div class="engine-options">${[
+        ['http', 'server', 'API load', 'Send protocol requests to test service capacity.'],
+        ['browser', 'browser', 'Real browsers', 'Run user journeys and measure the frontend.'],
+        ['hybrid', 'layers', 'Hybrid', 'Test the user experience under API load.'],
+      ].map(([v, i, title, help]) => `<label class="engine-option"><input type="radio" name="engine" value="${v}" ${(def.engine || 'http') === v ? 'checked' : ''}>${icon(i)}<span><b>${title}</b><small>${help}</small></span><span class="selection-dot" aria-hidden="true"></span></label>`).join('')}</div>
+    </fieldset>
     <div class="tabs" id="tabs"></div>
     <div id="pane"></div>
     <div class="sticky-bar row">
-      <input type="text" id="gname" value="${esc(def.name)}" placeholder="Test name" style="max-width:320px">
-      <span class="grow"></span>
-      <span class="muted small" id="gsum"></span>
+      <div class="builder-name"><input type="text" id="gname" aria-label="Test name" value="${esc(def.name)}" placeholder="Test name"><span class="muted small" id="gsum"></span></div>
       <button class="btn" id="preview">Preview script</button>
       <button class="btn" id="save">${scriptId ? 'Update script' : 'Save as script'}</button>
       <button class="btn primary" id="saverun">Save &amp; run ▶</button>
@@ -114,24 +124,28 @@ export default async function generator(el, { params }) {
   let pane = el.querySelector('#pane');
   const drawTabs = () => {
     const n = def.requests.length;
-    el.querySelector('#tabs').innerHTML = [['source', '1 · Import'], ['requests', `2 · Requests<span class="count">${n}</span>`], ['profile', '3 · Load profile & SLAs'], ['data', '4 · Data, auth & variables'], ['preview', '5 · Script']]
-      .map(([k, l]) => `<button data-tab="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('');
+    const steps = def.engine === 'browser'
+      ? [['browser', 'Browser journey'], ['preview', 'Review script']]
+      : [['source', 'Import'], ['requests', `Requests <span class="count">${n}</span>`], ...(def.engine === 'hybrid' ? [['browser', 'Browser journey']] : []), ['profile', 'Load & SLAs'], ['data', 'Data & auth'], ['preview', 'Review script']];
+    el.querySelector('#tabs').innerHTML = steps.map(([k, l], i) => `<button data-tab="${k}" ${tab === k ? 'aria-current="step"' : ''} class="${tab === k ? 'on' : ''}"><span class="step-number">${i + 1}</span>${l}</button>`).join('') + (def.engine === 'browser' ? `<button class="ai-option ${tab === 'source' ? 'on' : ''}" data-tab="source" ${tab === 'source' ? 'aria-current="step"' : ''}>${icon('spark')} AI assistant</button>` : '');
     const on = def.requests.filter((r) => r.enabled !== false).length;
-    el.querySelector('#gsum').textContent = `${on} request${on === 1 ? '' : 's'} · ${app.info?.profiles?.[def.profile.type]?.label || def.profile.type}`;
+    const browserSummary = `${def.browser?.vus || 2} browser${Number(def.browser?.vus) === 1 ? '' : 's'} · ${def.browser?.duration || '1m'}`;
+    el.querySelector('#gsum').textContent = def.engine === 'browser' ? browserSummary : `${on} API request${on === 1 ? '' : 's'} · ${app.info?.profiles?.[def.profile.type]?.label || def.profile.type}${def.engine === 'hybrid' ? ` + ${browserSummary}` : ''}`;
   };
 
   function draw() {
     aiAbort?.abort();
+    el.querySelectorAll('#engine input').forEach(input => { input.checked = input.value === (def.engine || 'http'); });
     drawTabs();
     // The AI panel has its own save buttons; the builder bar would only confuse there.
-    el.querySelector('.sticky-bar').classList.toggle('hidden', tab === 'source' && source === 'ai');
+    el.querySelector('.sticky-bar').classList.toggle('hidden', tab === 'source' && (source === 'ai' || def.engine === 'browser'));
     profileChart?.destroy(); profileChart = null;
     previewCm = null;
     // Fresh pane element each time so per-tab listeners never accumulate.
     const fresh = pane.cloneNode(false);
     pane.replaceWith(fresh);
     pane = fresh;
-    ({ source: drawSource, requests: drawRequests, profile: drawProfile, data: drawData, preview: drawPreview })[tab]();
+    ({ source: drawSource, requests: drawRequests, profile: drawProfile, browser: drawBrowser, data: drawData, preview: drawPreview })[tab]();
   }
 
   // ---------- 1. Source ----------
@@ -142,7 +156,7 @@ export default async function generator(el, { params }) {
     const label = app.info?.profiles?.[p.type]?.label || p.type;
     const params = Object.entries(p).filter(([k, v]) => k !== 'type' && v !== '' && v != null).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
     const t = def.thresholds || {};
-    const th = [t.p95 && `p95 < ${t.p95}ms`, t.p99 && `p99 < ${t.p99}ms`, t.errorRate !== '' && t.errorRate != null && `error rate < ${t.errorRate}%`, t.checkRate !== '' && t.checkRate != null && `checks > ${t.checkRate}%`].filter(Boolean).join(', ');
+    const th = [t.p95 && `p95 < ${t.p95}ms`, t.p99 && `p99 < ${t.p99}ms`, t.errorRate !== '' && t.errorRate != null && `error rate <= ${t.errorRate}%`, t.checkRate !== '' && t.checkRate != null && `checks >= ${t.checkRate}%`].filter(Boolean).join(', ');
     const tt = def.thinkTime || {};
     return `Profile: ${label}${params ? ` (${params})` : ''}\nThresholds: ${th || 'none'}${tt.min || tt.max ? `\nThink time between iterations: ${tt.min || 0}–${tt.max || tt.min}s` : ''}`;
   }
@@ -151,14 +165,14 @@ export default async function generator(el, { params }) {
   function drawAi() {
     const configured = app.info?.ai?.configured;
     pane.innerHTML = `
-      <div class="row" id="srcs" style="margin-bottom:12px">${Object.entries(SOURCES).map(([k, v]) => `<button class="btn ${k === source ? 'primary' : ''}" data-src="${k}">${v.label}</button>`).join('')}</div>
+      <div class="row" id="srcs" style="margin-bottom:12px">${Object.entries(SOURCES).filter(([k]) => def.engine !== 'browser' || k === 'ai').map(([k, v]) => `<button class="btn ${k === source ? 'primary' : ''}" data-src="${k}">${v.label}</button>`).join('')}</div>
       ${configured ? '' : `<div class="warnbox" style="margin-bottom:12px"><b>Set up an AI provider first.</b> Add an API key for Claude, OpenAI, Gemini, NVIDIA, Groq, OpenRouter, Mistral, DeepSeek, Ollama or any OpenAI-compatible endpoint in <a href="#/settings">Settings → AI providers</a>.</div>`}
       <div class="card">
-        <p class="muted" style="margin-top:0">Describe the test in plain English. The AI writes the k6 script, k6 checks it, and the AI fixes anything k6 rejects.</p>
+        <p class="muted" style="margin-top:0">Describe the test in plain English. The AI writes the k6 script, k6 checks it, and the AI fixes anything k6 rejects. The selected test type above applies to AI generation too. Validation checks script loading; endpoints, selectors and runtime behaviour still need a smoke test.</p>
         <label class="f">What should the test do?<textarea id="aiprompt" rows="5" style="font-family:inherit;font-size:14px" placeholder="e.g. Log in with POST /api/login using users from a CSV, browse 3 random products, add one to the cart and check out. Ramp to 200 users over 5 minutes, hold for 10. p95 under 400ms and under 1% errors.">${esc(store.get('ai-prompt', ''))}</textarea></label>
         <div class="grid2" style="margin-top:10px">
           <label class="f">Base URL (optional)<input type="text" id="aibase" class="mono" value="${esc(def.baseUrl || '')}" placeholder="https://api.example.com"></label>
-          <div style="display:flex;align-items:flex-end;padding-bottom:6px"><label class="check"><input type="checkbox" id="aiload" ${store.get('ai-useload', false) ? 'checked' : ''}> Use the load profile &amp; SLAs from tab 3 (${esc(app.info?.profiles?.[def.profile.type]?.label || def.profile.type)})</label></div>
+          <div class="${def.engine === 'browser' ? 'hidden' : ''}" style="display:flex;align-items:flex-end;padding-bottom:6px"><label class="check"><input type="checkbox" id="aiload" ${store.get('ai-useload', false) ? 'checked' : ''}> Use the configured load profile &amp; SLAs (${esc(app.info?.profiles?.[def.profile.type]?.label || def.profile.type)})</label></div>
         </div>
         <details style="margin-top:6px"><summary>Reference material (optional) — API docs, an OpenAPI spec, sample requests</summary>
           <textarea id="airef" rows="6" placeholder="Paste anything that helps the AI get endpoints and payloads right…"></textarea>
@@ -227,9 +241,11 @@ export default async function generator(el, { params }) {
       setStatus('Thinking…');
       await streamAi({
         prompt,
+        engine: def.engine || 'http',
+        browser: def.browser,
         baseUrl: pane.querySelector('#aibase').value.trim(),
         reference: pane.querySelector('#airef').value,
-        loadHint: pane.querySelector('#aiload').checked ? loadHint() : '',
+        loadHint: def.engine !== 'browser' && pane.querySelector('#aiload').checked ? loadHint() : '',
         provider: provSel?.value,
       }, {
         provider: (d) => { status.title = `${d.label} · ${d.model}`; },
@@ -284,10 +300,10 @@ export default async function generator(el, { params }) {
   }
 
   function drawSource() {
-    if (source === 'ai') return drawAi();
+    if (source === 'ai' || def.engine === 'browser') return drawAi();
     const s = SOURCES[source];
     pane.innerHTML = `
-      <div class="row" id="srcs" style="margin-bottom:12px">${Object.entries(SOURCES).map(([k, v]) => `<button class="btn ${k === source ? 'primary' : ''}" data-src="${k}">${v.label}</button>`).join('')}</div>
+      <div class="row" id="srcs" style="margin-bottom:12px">${Object.entries(SOURCES).filter(([k]) => def.engine !== 'browser' || k === 'ai').map(([k, v]) => `<button class="btn ${k === source ? 'primary' : ''}" data-src="${k}">${v.label}</button>`).join('')}</div>
       <div class="card">
         <p class="muted" style="margin-top:0">${esc(s.help)}</p>
         ${source === 'url'
@@ -472,6 +488,50 @@ export default async function generator(el, { params }) {
     box.addEventListener('change', (e) => { if (e.target.tagName === 'SELECT') onEdit(e); });
   }
 
+  function drawBrowser() {
+    def.browser ||= { vus: 2, duration: '1m', lcp: 2500, steps: [{ action: 'goto', value: '/', selector: '' }] };
+    const b = def.browser;
+    pane.innerHTML = `<div class="card">
+      <div class="eyebrow">SIMULATE REAL USERS</div><h3 class="builder-heading">Browser journey</h3>
+      <p class="muted small">Build the steps each user will follow in an isolated Chromium session. Start with 2–5 users; Chrome or Chromium must be installed on the LoadDeck server.</p>
+      <label class="f">Base URL<input type="text" id="browserbase" value="${esc(def.baseUrl)}" placeholder="https://staging.example.com" class="mono"></label>
+      <div class="fields">
+        <label class="f">Concurrent browser users<input type="number" min="1" max="100" data-browser="vus" value="${esc(b.vus)}"></label>
+        <label class="f">Browser duration<input type="text" data-browser="duration" value="${esc(b.duration)}"></label>
+        <label class="f">p75 LCP below (ms)<input type="number" min="1" data-browser="lcp" value="${esc(b.lcp)}"></label>
+      </div>
+      <details class="builder-help"><summary>Credentials, timing &amp; browser setup</summary><p class="muted small">Browser duration is independent of the API load profile. Align them to observe frontend behaviour throughout the test. Navigation paths use the Base URL above (shared with Requests). API auth, headers and CSV data apply to API requests; use Fill with <code>{{USERNAME}}</code> or <code>{{PASSWORD}}</code> to read browser credentials from run environment variables.</p></details>
+      <div id="browsersteps">${b.steps.map((step, i) => `<div class="row" data-step="${i}" style="margin-bottom:8px;align-items:center">
+        <span>${i + 1}.</span>
+        <select aria-label="Action for step ${i + 1}" data-step-field="action" style="max-width:170px">${[['goto', 'Navigate'], ['fill', 'Fill input'], ['click', 'Click'], ['wait', 'Wait for visible'], ['assertText', 'Check text']].map(([v,l]) => `<option value="${v}" ${step.action === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <input class="grow mono" data-step-field="selector" aria-label="CSS selector for step ${i + 1}" ${step.action === 'goto' ? 'disabled' : ''} placeholder="${step.action === 'goto' ? 'No selector needed' : 'CSS selector, e.g. #login'}" value="${esc(step.selector)}">
+        <input class="grow mono" data-step-field="value" aria-label="Value for step ${i + 1}" ${['click', 'wait'].includes(step.action) ? 'disabled' : ''} placeholder="${step.action === 'goto' ? 'Page path, e.g. /login' : step.action === 'fill' ? 'Input value or {{ENV_VAR}}' : step.action === 'assertText' ? 'Expected text' : 'No value needed'}" value="${esc(step.value)}">
+        <button class="btn sm" data-step-up="${i}" aria-label="Move step up">↑</button>
+        <button class="btn sm danger" data-step-delete="${i}" aria-label="Delete step">✕</button>
+      </div>`).join('')}</div>
+      <button class="btn sm" id="browseradd">+ Add step</button>
+      <p class="muted small">Use waits after clicks to confirm the destination is ready. Checks verify navigation status and expected text; failed checks affect the test verdict.</p>
+    </div>`;
+    pane.addEventListener('input', e => {
+      if (e.target.id === 'browserbase') def.baseUrl = e.target.value.trim();
+      if (e.target.dataset.browser) b[e.target.dataset.browser] = e.target.value;
+      const row = e.target.closest('[data-step]');
+      if (row && e.target.dataset.stepField) b.steps[+row.dataset.step][e.target.dataset.stepField] = e.target.value;
+      persist(); drawTabs();
+    });
+    pane.addEventListener('change', e => {
+      const row = e.target.closest('[data-step]');
+      if (row && e.target.dataset.stepField) { b.steps[+row.dataset.step][e.target.dataset.stepField] = e.target.value; persist(); if (e.target.dataset.stepField === 'action') draw(); }
+    });
+    pane.addEventListener('click', e => {
+      if (e.target.id === 'browseradd') b.steps.push({ action: 'click', selector: '', value: '' });
+      else if (e.target.hasAttribute('data-step-delete')) b.steps.splice(+e.target.dataset.stepDelete, 1);
+      else if (e.target.hasAttribute('data-step-up')) { const i = +e.target.dataset.stepUp; if (i > 0) [b.steps[i-1], b.steps[i]] = [b.steps[i], b.steps[i-1]]; }
+      else return;
+      persist(); draw();
+    });
+  }
+
   // ---------- 3. Profile ----------
   function drawProfile() {
     const profiles = app.info?.profiles || {};
@@ -494,11 +554,11 @@ export default async function generator(el, { params }) {
           <div class="fields">
             <label class="f">p95 response below (ms)<input type="number" data-b="thresholds.p95" value="${esc(t.p95 ?? '')}"></label>
             <label class="f">p99 response below (ms)<input type="number" data-b="thresholds.p99" value="${esc(t.p99 ?? '')}"></label>
-            <label class="f">Error rate below (%)<input type="number" step="0.1" data-b="thresholds.errorRate" value="${esc(t.errorRate ?? '')}"></label>
-            <label class="f">Checks passing above (%)<input type="number" step="0.1" data-b="thresholds.checkRate" value="${esc(t.checkRate ?? '')}"></label>
+            <label class="f">Error rate at most (%)<input type="number" step="0.1" data-b="thresholds.errorRate" value="${esc(t.errorRate ?? '')}"></label>
+            <label class="f">Checks passing at least (%)<input type="number" step="0.1" data-b="thresholds.checkRate" value="${esc(t.checkRate ?? '')}"></label>
           </div>
           <label class="check" style="margin-top:10px"><input type="checkbox" data-bc="thresholds.abortOnFail" ${t.abortOnFail ? 'checked' : ''}> Abort the test as soon as a threshold fails ${p.type === 'breakpoint' ? '(always on for breakpoint)' : ''}</label>
-          <p class="muted small">Per-endpoint SLAs can be set on each request (tab 2).</p>
+          <p class="muted small">Set per-endpoint SLAs in the Requests step.</p>
           <div class="sep"></div>
           <h3>Think time between iterations</h3>
           <div class="fields">
@@ -639,10 +699,10 @@ export default async function generator(el, { params }) {
   }
 
   async function save(andRun) {
-    if (!def.requests.some((r) => r.enabled !== false && r.url)) return toast('Add at least one enabled request first', true);
+    if (def.engine !== 'browser' && !def.requests.some((r) => r.enabled !== false && r.url)) return toast('Add at least one enabled request first', true);
     try {
       const code = await generate();
-      const body = { name: def.name, code, source: def.source || 'builder', generator: def, description: `${def.requests.filter((r) => r.enabled !== false).length} requests · ${app.info?.profiles?.[def.profile.type]?.label || ''}` };
+      const body = { name: def.name, code, source: def.source || 'builder', generator: def, description: el.querySelector('#gsum').textContent };
       const s = scriptId ? await api(`/api/scripts/${scriptId}`, { method: 'PUT', body }) : await api('/api/scripts', { method: 'POST', body });
       dirty = false;
       if (!scriptId) store.set('gen-draft', null);
@@ -653,6 +713,7 @@ export default async function generator(el, { params }) {
     } catch (e) { toast(e.message, true); }
   }
 
+  el.querySelector('#engine').addEventListener('change', e => { def.engine = e.target.value; persist(); tab = def.engine !== 'http' ? 'browser' : def.requests.length ? 'requests' : 'source'; draw(); });
   el.querySelector('#tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; draw(); } });
   el.querySelector('#gname').addEventListener('input', (e) => { def.name = e.target.value; persist(); });
   el.querySelector('#preview').addEventListener('click', () => { tab = 'preview'; draw(); });

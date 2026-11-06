@@ -14,13 +14,15 @@
   </script>
 </head>
 <body>
+  <a class="skip-link" href="#view">Skip to content</a>
   <div class="shell">
     <aside class="side">
       <a class="brand" href="#/">
         <img src="/img/logo.svg" alt="" width="26" height="26">
-        <span>LoadDeck</span>
+        <span>LoadDeck<small>PERFORMANCE WORKSPACE</small></span>
       </a>
-      <nav id="nav">
+      <div class="nav-label">WORKSPACE</div>
+      <nav id="nav" aria-label="Main navigation">
         <a href="#/" data-nav="dashboard"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3zm10 8h8V11h-8zM3 21h8v-6H3zm10-18v6h8V3z"/></svg>Dashboard</a>
         <a href="#/scripts" data-nav="scripts"><svg viewBox="0 0 24 24"><path d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6z"/></svg>Scripts</a>
         <a href="#/generate" data-nav="generate"><svg viewBox="0 0 24 24"><path d="m19 9 1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25z"/></svg>Generator</a>
@@ -30,11 +32,19 @@
       </nav>
       <div class="side-foot">
         <div id="active-runs"></div>
+        <div class="engine-label"><span class="status-dot"></span> LOCAL ENGINE</div>
         <div class="k6v" id="k6v">k6 …</div>
         <button class="btn ghost sm" id="theme-btn" title="Toggle light/dark theme">◐ Theme</button>
       </div>
     </aside>
-    <main id="view" class="main"></main>
+    <div class="workspace">
+      <header class="workspace-bar">
+        <div class="workspace-location"><span class="workspace-mark">LD</span><span>Local workspace</span><span class="crumb-separator">/</span><b id="workspace-crumb">Overview</b></div>
+        <div class="workspace-tools"><span class="engine-state" id="engine-state">Checking engine</span><span class="workspace-divider"></span><a class="btn sm" href="#/generate"><span aria-hidden="true">＋</span> New test</a></div>
+      </header>
+      <main id="view" class="main" tabindex="-1"></main>
+      <footer class="workspace-footer"><span>LoadDeck <span class="muted">/</span> Built for the next release.</span><span>Powered by k6</span></footer>
+    </div>
   </div>
   <div id="toasts"></div>
 

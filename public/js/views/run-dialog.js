@@ -27,6 +27,8 @@ export async function openRunDialog(script, preset = null) {
       <label class="f">Stages — one per line as <code>duration:targetVUs</code><textarea id="rs" rows="4">${esc(cfg.stages)}</textarea></label>
     </div>
     <p class="muted small" id="m-note" style="margin:6px 0 0">Overrides replace the scenarios defined in the script.</p>
+    <label class="check" style="margin-top:12px"><input type="checkbox" id="rbhead" ${cfg.browserHeadless === false ? 'checked' : ''}> Show browser windows (browser / hybrid scripts)</label>
+    <p class="muted small">Browser and hybrid tests require Use script options. Browser windows open on the machine running LoadDeck.</p>
     <details style="margin-top:12px" ${cfg.env || cfg.tags ? 'open' : ''}><summary>Environment variables, tags &amp; debugging</summary>
       <div class="grid2" style="margin-top:8px">
         <label class="f">Environment (<code>-e</code>) — KEY=value per line<textarea id="re" rows="4" placeholder="BASE_URL=https://staging.example.com&#10;TOKEN=abc">${esc(cfg.env)}</textarea></label>
@@ -52,6 +54,7 @@ export async function openRunDialog(script, preset = null) {
   const mb = result;
   const mode = mb.querySelector('input[name=rmode]:checked').value;
   const saved = {
+    browserHeadless: !mb.querySelector('#rbhead').checked,
     mode, vus: mb.querySelector(mode === 'iterations' ? '#riv' : '#rv').value, duration: mb.querySelector('#rd').value,
     iterations: mb.querySelector('#ri').value, stages: mb.querySelector('#rs').value, env: mb.querySelector('#re').value, tags: mb.querySelector('#rt').value,
   };
@@ -66,6 +69,7 @@ export async function openRunDialog(script, preset = null) {
     env: parseKv(saved.env),
     tags: parseKv(saved.tags),
     httpDebug: mb.querySelector('#rh').checked,
+    browserHeadless: saved.browserHeadless,
   };
   if (mode === 'quick') Object.assign(req, { vus: saved.vus, duration: saved.duration });
   if (mode === 'iterations') Object.assign(req, { vus: saved.vus, iterations: saved.iterations });
